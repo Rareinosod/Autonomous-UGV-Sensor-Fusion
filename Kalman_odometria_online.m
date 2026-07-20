@@ -1,0 +1,239 @@
+clear all
+close all
+
+run('Interfaccia.m');
+
+% Aspetta che b venga creato (assicurati che la GUI assegni b al workspace globale)
+while isempty(evalin('base', 'who(''b'')'))
+    pause(0.1);
+end
+b = evalin('base', 'b');
+
+
+% Crea finestra grafica
+fig = figure('Name', 'Dati Encoder da PIC', 'NumberTitle', 'off', 'Color', 'white');
+encoder1_text = uicontrol('Style','text','Position',[50,220,400,40],'FontSize',12,'HorizontalAlignment','left');
+encoder2_text = uicontrol('Style','text','Position',[50,180,400,40],'FontSize',12,'HorizontalAlignment','left');
+lidar_text = uicontrol('Style','text','Position',[50,140,400,40],'FontSize',12,'HorizontalAlignment','left');
+
+dati_salvati = [];
+
+disp('Lettura dati encoder... premi Ctrl+C per uscire.');
+gradi1 = NaN;
+gradi2 = NaN;
+
+% inizializzazione dei parametri
+
+T_s = 0.02;        % Tempo di campionamento [s] (uguale a odometria)
+r = 0.0345;        % Raggio ruota [m]
+d = 0.128;         % Distanza tra ruote [m] (allineato a odometria)
+
+x_i=0;
+y_i=1;
+xf=3.5;
+yf=0.4;
+
+% Stato iniziale
+x_k = 0;
+y_k = y_i;
+theta_k = 0;
+x_kalman = [x_k; y_k; theta_k];
+
+% Parete fissa per il LIDAR
+Y_wall = 1.4; % da definire 
+NumObstacol=1;
+
+% Matrice covarianza iniziale
+n1 = 3; % posa del robot x y theta
+n2 = 1*NumObstacol; % numero divariabili con cui sono definiti gli ostacoli x il numero di ostacoli 
+P = eye(n1);
+
+fig2 = figure(3);
+% creazione della mappa 
+axis equal;
+xlim([-1, 5]); ylim([-1,5]);  % Adatta ai limiti della tua simulazione
+grid on;
+
+hold on 
+%plot( [0, 1.8],[Y_wall,Y_wall], 'b-', 'LineWidth', 2); 
+xlabel('X [m]');
+ylabel('Y [m]');
+
+hold on
+plot(x_i, y_i, '*g', 'MarkerSize',9)   
+plot(xf, yf, '*r', 'MarkerSize',9)
+% Linee animate per EKF (blu) e odometria (rossa)
+kalman_line = animatedline('Color','b','LineWidth',1.5);
+odom_line = animatedline('Color','r','LineWidth',1.5);
+
+hold on
+
+
+% === Caricamento e disegno della mappa ostacoli ===
+if exist('MappaOstacoliKalman.mat', 'file')
+    loaded = load('MappaOstacoliKalman.mat', 'Coord_LM');
+    Coord_LM = loaded.Coord_LM;
+    
+    colors = lines(length(Coord_LM)); % Palette colori per ostacoli
+    
+    for i = 1:length(Coord_LM)
+        obstacle = Coord_LM{i};
+        fill(obstacle(:,1), obstacle(:,2), colors(i,:), ...
+            'FaceAlpha', 0.5, 'EdgeColor', 'k'); 
+    end
+else
+    warning('File MappaOstacoliKalman.mat non trovato. Nessuna mappa caricata.');
+end
+
+
+% Freccia unica (lunghezza zero all’inizio)
+h_arrow = quiver(0, 0, 0, 0, ...
+    'AutoScale','off', ...
+    'MaxHeadSize',0.5, ...
+    'Color','b', ...
+    'LineWidth',1.5);
+
+i=1;
+% Fattore di scala per la lunghezza della freccia
+arrowScale = 0.7;
+
+while ishandle(fig)
+    if b.NumBytesAvailable >= 7  
+        header = read(b, 1, 'uint8');  % Legge il byte di controllo
+
+        if header == 0xAA  % Controlla se il byte di controllo è corretto
+            
+            raw = read(b, 6, 'uint8');  
+            msb1 = raw(1);
+            lsb1 = raw(2);
+            msb2 = raw(3);
+            lsb2 = raw(4);
+            lidar_msb = raw(5);
+            lidar_lsb = raw(6);
+            % Ricostruzione 16 bit: LSB + MSB
+            gradi1 = double(msb1)*256 + double(lsb1);
+            gradi2 = double(msb2)*256 + double(lsb2);
+            lidar = double(lidar_msb)*256 + double(lidar_lsb);
+            % Salvataggio dati
+            %dati_salvati = [dati_salvati; gradi1, gradi2, lidar];
+            % conversione lidar
+            a_lidar = 37.20;
+            b_lidar = -0.86;
+            range = 5.0 / 1023.0;
+            tensione = lidar * range;
+            distanza_cm = (tensione / a_lidar).^(1 / b_lidar);
+            distanza_m = distanza_cm / 100;
+            encoder1_text.String = sprintf('Encoder 1 - Gradi: %d', gradi1);
+            encoder2_text.String = sprintf('Encoder 2 - Gradi: %d', gradi2);
+            lidar_text.String = sprintf('Lidar - Distanza [m]: %.2f', distanza_m);
+            
+            % conversione encoder
+            phi_sx(i) = gradi1;
+            phi_dx(i) = gradi2;
+            
+            if i>1
+                delta_phi_sx = -(phi_sx(i)-phi_sx(i-1));
+                delta_phi_dx = -(phi_dx(i)-phi_dx(i-1));
+
+                delta_phi_sx(delta_phi_sx > 2048) = delta_phi_sx(delta_phi_sx > 2048) - 4096;
+                delta_phi_sx(delta_phi_sx < -2048) = delta_phi_sx(delta_phi_sx < -2048) + 4096;
+                delta_phi_dx(delta_phi_dx > 2048) = delta_phi_dx(delta_phi_dx > 2048) - 4096;
+                delta_phi_dx(delta_phi_dx < -2048) = delta_phi_dx(delta_phi_dx < -2048) + 4096;
+                
+                % Conversione in radianti
+                k_enc = 2 * pi / 4096;
+                delta_phi_rad_sx = k_enc * delta_phi_sx;
+                delta_phi_rad_dx = k_enc * delta_phi_dx;
+            
+                % Ascissa curvilinea e variazione angolo
+                delta_s = 0.5 * r * (delta_phi_rad_sx + delta_phi_rad_dx);
+                delta_theta = (r/d) * (delta_phi_rad_dx - delta_phi_rad_sx);
+                
+                % % Correzione con EKF
+                y_lidar=distanza_m;
+                [x_kalman, P] = ekf(n1, n2, Y_wall, x_kalman, P, y_lidar, T_s, delta_s/T_s, delta_theta/T_s);
+                
+
+
+                motion_model = runge_kutta(x_k, y_k, theta_k, T_s, delta_s/T_s, delta_theta/T_s);
+                x_k1 = motion_model(1);
+                y_k1 = motion_model(2);
+                theta_k1 = motion_model(3);
+                figure(fig2)
+                
+                % Aggiungi punto alla linea EKF
+                addpoints(kalman_line, x_kalman(1), x_kalman(2));
+                
+                % Aggiungi punto alla linea odometria
+                %addpoints(odom_line, x_k1, y_k1);
+                
+                % Aggiorna il disegno (limitrate per prestazioni)
+                drawnow limitrate;
+
+                %plot(x_k1, y_k1, 'r.'); % odometria
+                L = arrowScale * abs(delta_s/T_s);
+
+                % Aggiornamento della freccia
+                % set(h_arrow, ...
+                %     'XData', x_k1, ...
+                %     'YData', y_k1, ...
+                %     'UData', L*cos(theta_k1), ...
+                %     'VData', L*sin(theta_k1));
+
+
+                
+                % Aggiorna stato odometrico
+                x_k = x_k1;
+                y_k = y_k1;
+                theta_k = theta_k1;
+                hold on
+            end
+            i=i+1;
+       end
+    end
+drawnow;
+end
+
+save('dati_encoder.mat', 'dati_salvati');
+
+
+
+%%
+function output = runge_kutta(x_k, y_k, theta_k, T_s, v, w)
+    output = [ x_k + v*T_s*cos(theta_k + w*T_s/2);
+               y_k + v*T_s*sin(theta_k + w*T_s/2);
+               theta_k + w*T_s ];
+end
+
+function w_ = adattive_w(nu)
+    base = 2;
+    max_w = 10;
+    min_w = 0.01;
+    w_ = base + abs(nu);
+    w_ = min(max(w_, min_w), max_w);
+end
+
+function [x1, P1] = ekf(n1, n2, Y, x, P, y, T_s, v, omega)
+    v_ = 0.02;  % Rumore modello
+    x_pred = [...
+        x(1) + T_s*v*cos(x(3) + omega*T_s/2);
+        x(2) + T_s*v*sin(x(3) + omega*T_s/2);
+        x(3) + T_s*omega...
+    ];
+    F = [1, 0, -T_s*v*sin(x(3) + omega*T_s/2);
+        0, 1,  T_s*v*cos(x(3) + omega*T_s/2);
+        0, 0, 1];
+    V_k = v_^2 * eye(n1);
+    P = F * P * F' + V_k;
+
+    H = [0, -1, 0];
+    h = Y - x_pred(2);
+    nu = y - h;
+
+    w_ = adattive_w(nu);
+    W_k = w_^2 * eye(n2);
+
+    R = P * H' / (H * P * H' + W_k);
+    x1 = x_pred + R * nu;
+    P1 = P - R * H * P;
+end
