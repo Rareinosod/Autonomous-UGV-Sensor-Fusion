@@ -129,7 +129,7 @@ int16 th_r_lsb, th_r_msb, th_l_lsb, th_l_msb, th_vel, th_vel_msb, th_vel_lsb;
             th_vel = (int16)((th_vel_msb << 8) | th_vel_lsb);
 
          
-            int16 new_thdx = thdx - th_vel; // Nota: -th_vel perché motore dx usa verso opposto
+            int16 new_thdx = thdx - th_vel; // Nota: -th_vel perchÃ© motore dx usa verso opposto
             int16 new_thsx = thsx + th_vel;
          
             // Verifica se entrambi i motori possono essere aggiornati senza cambiare verso e rimanendo nei limiti
