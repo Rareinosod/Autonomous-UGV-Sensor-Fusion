@@ -1,10 +1,6 @@
 # Autonomous-UGV-Sensor-Fusion
 Sviluppo in MATLAB di logiche per la teleoperazione via Bluetooth e la scansione ambientale per la ricostruzione offline della mappa (2D mapping). • Implementazione della navigazione autonoma tramite Filtro di Kalman per la correzione della stima dello stato e l'odometria, fondendo in tempo reale dati encoder e LiDAR.
 
-
-
-# Visual-Tracking e State Estimation: Robotica Mobile
-
 Questo repository contiene l'intero stack software per il controllo, l'acquisizione dati e la stima dello stato (localizzazione) di un robot mobile a trazione differenziale. Il progetto integra la programmazione a basso livello (microcontrollore PIC) con l'elaborazione ad alto livello e l'interfaccia grafica (MATLAB).
 
 ---
